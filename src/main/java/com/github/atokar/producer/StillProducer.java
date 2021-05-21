@@ -1,52 +1,67 @@
 package com.github.atokar.producer;
 
 import com.github.atokar.serializer.JsonSerializer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.common.serialization.LongSerializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 public class StillProducer {
 
-    private final String TOPIC = "still";
+    private static final Logger log = LoggerFactory.getLogger(StillProducer.class);
+
+    public final String TOPIC = "still";
 
     public void runSequence() {
-        Producer<Long, Map<String, Object>> producer = createProducer();
-        Map<String, Object> part1 = Collections.singletonMap("notes", Arrays.asList("C4", "E4", "A4"));
-        Map<String, Object> part2 = Collections.singletonMap("notes", Arrays.asList("B3", "E4", "A4"));
-        Map<String, Object> part3 = Collections.singletonMap("notes", Arrays.asList("B3", "E4", "G4"));
+        Producer<Long, Map<String, List<String>>> producer = createProducer();
+        Map<String, List<String>> part1 = Collections.singletonMap("notes", Arrays.asList("C4", "E4", "A4"));
+        Map<String, List<String>> part2 = Collections.singletonMap("notes", Arrays.asList("B3", "E4", "A4"));
+        Map<String, List<String>> part3 = Collections.singletonMap("notes", Arrays.asList("B3", "E4", "G4"));
 
-        ProducerRecord<Long, Map<String, Object>> record;
         try {
+            long l = 0;
             while (!Thread.currentThread().isInterrupted()) {
+                l++;
+                List<CompletableFuture<RecordMetadata>> all = new ArrayList<>(16);
                 for (int i = 0; i < 8; i++) {
-                    record = new ProducerRecord<>(TOPIC, part1);
-                    producer.send(record);
+                    all.add(sendAsync(producer, part1));
                     Thread.sleep(312, 500_000);
                 }
                 for (int i = 0; i < 3; i++) {
-                    record = new ProducerRecord<>(TOPIC, part2);
-                    producer.send(record);
-                    Thread.sleep(312, 500_000);
+                    all.add(sendAsync(producer, part2));
+                   Thread.sleep(312, 500_000);
                 }
                 for (int i = 0; i < 5; i++) {
-                    record = new ProducerRecord<>(TOPIC, part3);
-                    producer.send(record);
+                    all.add(sendAsync(producer, part3));
                     Thread.sleep(312, 500_000);
                 }
+                CompletableFuture.allOf(all.toArray(new CompletableFuture[16]));
+                log.debug("Iteration completed {} times", l);
             }
         } catch (InterruptedException ignore) {
-            System.out.println("Sequence was terminated by InterruptedException.");
+            log.info("Sequence was terminated by InterruptedException.");
+        } catch (Exception e) {
+            log.error("Sequence was terminated general Exception.", e);
         }
     }
 
-    public static Producer<Long, Map<String, Object>> createProducer() {
+    private CompletableFuture<RecordMetadata> sendAsync(Producer<Long, Map<String, List<String>>> producer, Map<String, List<String>> message) {
+        ProducerRecord<Long, Map<String, List<String>>> record = new ProducerRecord<>(TOPIC, message);
+        CompletableFuture<RecordMetadata> result = new CompletableFuture<>();
+        producer.send(record, (metadata, exception) -> {
+            if (null != exception) {
+                result.completeExceptionally(exception);
+            } else {
+                result.complete(metadata);
+            }
+        });
+        return result;
+    }
+
+    public static Producer<Long, Map<String, List<String>>> createProducer() {
         Properties props = new Properties();
         String bootstrapServers = System.getenv().getOrDefault("BOOTSTRAP_SERVERS", "localhost:9092");
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
